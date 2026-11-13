@@ -5,7 +5,8 @@ import os
 import matplotlib.pyplot as plt
 from scipy.stats import chi2_contingency,kruskal
 from matplotlib.colors import LinearSegmentedColormap
-
+from scipy.stats import spearmanr, mannwhitneyu
+from itertools import combinations
 #The survey was run in english and spanish. Some  answers needed to be mapped before the analysis. 
 Data=pd.read_csv("SoundSurvey.csv",encoding="cp1252")
 
@@ -285,8 +286,6 @@ plot_codes(long_ai, "Desired AI support", "figures/desired_ai.jpg")
 
 ##COMPARED TO YEARS OF EXPERIENCE: 
 
-
-
 def set_style():
     plt.rcParams.update({
         "font.family": "sans-serif",
@@ -327,7 +326,7 @@ def get_pct(long, group_col="career_stage3", order=STAGES, top=6):
     return pct, sizes, top_codes
 
 
-# ---------- 1. AI use by career stage: donuts ----------
+# DONUT GRAPH: AI use by career stage. 
 AI_COLORS = {"Yes": "#A23B72", "Maybe": "#F4A6A6", "No": "#D9D9D9"}
 
 def donuts_by_group(col, colors, title, filename, group_col="career_stage3", order=STAGES,
@@ -342,15 +341,13 @@ def donuts_by_group(col, colors, title, filename, group_col="career_stage3", ord
         wedges, _ = ax.pie(counts, colors=[colors[c] for c in cats], startangle=90,
                            counterclock=False,
                            wedgeprops=dict(width=0.38, edgecolor="white", linewidth=1.5))
-        # Label each slice on the ring (skip the centre category and tiny slices)
         for w, cat in zip(wedges, cats):
             if cat == cats[0] or shares[cat] < min_label:
                 continue
-            ang = np.deg2rad((w.theta1 + w.theta2) / 2)   # middle of the slice
+            ang = np.deg2rad((w.theta1 + w.theta2) / 2)   
             ax.text(0.81 * np.cos(ang), 0.81 * np.sin(ang), f"{shares[cat]:.0f}%",
                     ha="center", va="center", fontsize=7.5,
                     color=text_colors.get(cat, "#333333"))
-        # Centre label: percentage plus the category name
         ax.text(0, 0, f"{shares.iloc[0]:.0f}%\n{cats[0].lower()}", ha="center", va="center",
                 fontsize=10, fontweight="bold", color=colors[cats[0]], linespacing=1.1)
         ax.set_title(f"{grp}\n(n={len(sub)})", fontsize=8.5, loc="center", fontweight="normal")
@@ -359,7 +356,7 @@ def donuts_by_group(col, colors, title, filename, group_col="career_stage3", ord
     fig.tight_layout(rect=(0, 0.06, 1, 0.95))
     fig.savefig(filename)
 
-# ---------- 2. Bottlenecks by career stage: heatmap ----------
+# HEAT MAP: Bottlenecks by career stage.
 def heatmap_by_group(long, title, filename, order=STAGES, top=6):
     pct, sizes, codes = get_pct(long, order=order, top=top)
     cmap = LinearSegmentedColormap.from_list("plum", ["#FFF5F7", "#F4A6A6", "#A23B72", "#4A1E5C"])
@@ -383,7 +380,7 @@ def heatmap_by_group(long, title, filename, order=STAGES, top=6):
     fig.savefig(filename)
 
 
-# ---------- 3. Concerns by career stage: bubble grid ----------
+#BUBBLES:  Concerns by career stage: bubble grid
 def bubble_grid(long, title, filename, order=STAGES, colors=STAGE_COLORS, top=5):
     pct, sizes, codes = get_pct(long, order=order, top=top)
     fig, ax = plt.subplots(figsize=(5.0, 0.6 * top + 1.6))
@@ -409,14 +406,240 @@ def bubble_grid(long, title, filename, order=STAGES, colors=STAGE_COLORS, top=5)
     fig.savefig(filename)
 
 
-# ---------- Make the three figures ----------
-donuts_by_group("ai_use", AI_COLORS, "Would you use AI in your workflow?",
-                "figures/ai_use_by_stage.jpg")
-heatmap_by_group(long_bottleneck, "Bottlenecks by career stage",
-                 "figures/bottlenecks_by_stage.jpg")
-bubble_grid(long_concerns, "Concerns about AI by career stage",
-            "figures/concerns_by_stage.jpg")
+donuts_by_group("ai_use", AI_COLORS, "Would you use AI in your workflow?","figures/ai_use_by_stage.jpg")
+heatmap_by_group(long_bottleneck, "Bottlenecks by career stage","figures/bottlenecks_by_stage.jpg")
+bubble_grid(long_concerns, "Concerns about AI by career stage", "figures/concerns_by_stage.jpg")
 
 # Is AI openness different across career stages?
 chi2, p, dof, expected = chi2_contingency(pd.crosstab(Data["career_stage3"], Data["ai_use"]))
 print(f"AI use by career stage: chi2 = {chi2:.2f}, p = {p:.3f}, min expected = {expected.min():.1f}")
+
+LIKERT_COLORS = {1: "#B2182B", 2: "#EF8A62", 3: "#D9D9D9", 4: "#C994C7", 5: "#7A1E5C"}
+LIKERT_NAMES = {1: "1 (least preferred)", 2: "2", 3: "3", 4: "4", 5: "5 (most preferred)"}
+labels = {"text_to_audio": "Text-to-audio", "parametric": "Parametric",
+          "hybrid": "Hybrid", "vocal_imitation": "Vocal imitation"}
+
+def likert_by_group(title, filename, group_col="career_stage3", order=STAGES):
+    fig, axes = plt.subplots(len(order), 1, figsize=(6.5, 1.35 * len(order) + 0.9), sharex=True)
+    # Same tool order in every panel: most preferred overall at the top
+    item_order = Data[options].apply(lambda s: (s >= 4).mean()).sort_values().index
+    for ax, grp in zip(axes, order):
+        sub = Data[Data[group_col] == grp]
+        pct = pd.DataFrame({c: sub[c].value_counts(normalize=True).reindex([1, 2, 3, 4, 5], fill_value=0) * 100
+                            for c in options}).T.loc[item_order]
+        y = np.arange(len(pct))
+        left = -(pct[1] + pct[2] + pct[3] / 2)   # centre the neutral answer on zero
+        for r in [1, 2, 3, 4, 5]:
+            ax.barh(y, pct[r], left=left, color=LIKERT_COLORS[r], label=LIKERT_NAMES[r],
+                    edgecolor="white", height=0.7)
+            left = left + pct[r]
+        ax.axvline(0, color="#555555", linewidth=0.8)
+        ax.set_yticks(y, [labels[c] for c in pct.index], fontsize=8)
+        ax.set_title(f"{grp} (n={len(sub)})", fontsize=9, fontweight="bold")
+        ax.grid(False)
+    axes[-1].set_xlim(-80, 80)
+    axes[-1].set_xticks(range(-80, 81, 20), [f"{abs(t)}%" for t in range(-80, 81, 20)])
+    axes[-1].set_xlabel("Percentage of participants")
+    handles, labs = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labs, ncol=5, loc="lower center", bbox_to_anchor=(0.5, -0.01), fontsize=7)
+    fig.suptitle(title, x=0.02, ha="left", fontsize=11, fontweight="bold")
+    fig.tight_layout(rect=(0, 0.05, 1, 0.97))
+    fig.savefig(filename)
+
+likert_by_group("Preferred AI tool types by career stage", "figures/likert_by_stage.jpg")
+
+year_order = {"<1": 0, "1-3": 1, "3-5": 2, "5-10": 3, ">10": 4}
+rows = []
+for c in options:
+    groups = [g[c].values for _, g in Data.groupby("career_stage3")]
+    H, p_kw = kruskal(*groups)
+    rho, p_rho = spearmanr(Data["years_clean"].map(year_order), Data[c])
+    rows.append({"tool": labels[c], "H": round(H, 2), "p_KW": p_kw,
+                 "rho": round(rho, 2), "p_rho": p_rho})
+res = pd.DataFrame(rows)
+res["p_KW_holm"] = holm(res["p_KW"])
+res["p_rho_holm"] = holm(res["p_rho"])
+print(res.round(3))
+
+#TEST
+top_bottlenecks = long_bottleneck["code"].value_counts().head(4).index.tolist()
+top_concerns = long_concerns["code"].value_counts().head(4).index.tolist()
+
+stats_bottlenecks = compare_by_group(long_bottleneck, "career_stage3", top_bottlenecks)
+stats_concerns = compare_by_group(long_concerns, "career_stage3", top_concerns)
+print(stats_bottlenecks)
+print(stats_concerns)
+item = "text_to_audio"
+rows = []
+for a, b in combinations(STAGES, 2):
+    x = Data.loc[Data["career_stage3"] == a, item]
+    y = Data.loc[Data["career_stage3"] == b, item]
+    U, p = mannwhitneyu(x, y, alternative="two-sided")
+    r_rb = 1 - 2 * U / (len(x) * len(y))   # effect size (rank-biserial)
+    rows.append({"pair": f"{a} vs {b}", "median_a": x.median(), "median_b": y.median(),
+                 "U": U, "p": p, "effect_r": round(r_rb, 2)})
+pairs = pd.DataFrame(rows)
+pairs["p_holm"] = holm(pairs["p"])
+print(pairs.round(3))
+
+# ===================== MEDIA TYPE COMPARISONS =====================
+# ===================== FIGURE FUNCTIONS (work for any grouping) =====================
+pd.set_option("display.width", 200)          # show wide tables without cutting columns
+pd.set_option("display.max_columns", None)
+
+def get_pct(long, group_col="career_stage3", order=STAGES, top=6):
+    wide = pd.crosstab(long["id"], long["code"]).clip(upper=1).reset_index()
+    df = Data[["id", group_col]].merge(wide, on="id", how="inner")
+    top_codes = long["code"].value_counts().head(top).index.tolist()
+    pct = df.groupby(group_col)[top_codes].mean().reindex(order) * 100
+    sizes = df[group_col].value_counts().reindex(order)
+    return pct, sizes, top_codes
+
+
+def donuts_by_group(col, colors, title, filename, group_col="career_stage3", order=STAGES,
+                    text_colors=None, min_label=5):
+    cats = list(colors.keys())
+    text_colors = text_colors or {}
+    fig, axes = plt.subplots(1, len(order), figsize=(2.1 * len(order), 2.7))
+    for ax, grp in zip(axes, order):
+        sub = Data.loc[Data[group_col] == grp, col].dropna()
+        counts = sub.value_counts().reindex(cats, fill_value=0)
+        shares = counts / counts.sum() * 100
+        wedges, _ = ax.pie(counts, colors=[colors[c] for c in cats], startangle=90,
+                           counterclock=False,
+                           wedgeprops=dict(width=0.38, edgecolor="white", linewidth=1.5))
+        for w, cat in zip(wedges, cats):
+            if cat == cats[0] or shares[cat] < min_label:
+                continue
+            ang = np.deg2rad((w.theta1 + w.theta2) / 2)
+            ax.text(0.81 * np.cos(ang), 0.81 * np.sin(ang), f"{shares[cat]:.0f}%",
+                    ha="center", va="center", fontsize=7.5,
+                    color=text_colors.get(cat, "#333333"))
+        ax.text(0, 0, f"{shares.iloc[0]:.0f}%\n{cats[0].lower()}", ha="center", va="center",
+                fontsize=10, fontweight="bold", color=colors[cats[0]], linespacing=1.1)
+        ax.set_title(f"{grp}\n(n={len(sub)})", fontsize=8.5, loc="center", fontweight="normal")
+    fig.legend(wedges, cats, loc="lower center", ncol=len(cats), bbox_to_anchor=(0.5, -0.02))
+    fig.suptitle(title, x=0.02, ha="left", fontsize=11, fontweight="bold")
+    fig.tight_layout(rect=(0, 0.06, 1, 0.95))
+    fig.savefig(filename)
+
+
+def heatmap_by_group(long, title, filename, group_col="career_stage3", order=STAGES, top=6):
+    pct, sizes, codes = get_pct(long, group_col=group_col, order=order, top=top)
+    cmap = LinearSegmentedColormap.from_list("plum", ["#FFF5F7", "#F4A6A6", "#A23B72", "#4A1E5C"])
+    data = pct[codes].T.values
+    fig, ax = plt.subplots(figsize=(5.0, 0.5 * top + 1.2))
+    ax.imshow(data, cmap=cmap, aspect="auto", vmin=0, vmax=max(60, data.max()))
+    ax.set_xticks(range(len(order)), [f"{g}\n(n={sizes[g]})" for g in order])
+    ax.set_yticks(range(len(codes)), codes)
+    for i in range(data.shape[0]):
+        for j in range(data.shape[1]):
+            v = data[i, j]
+            ax.text(j, i, f"{v:.0f}%", ha="center", va="center", fontsize=8,
+                    color="white" if v > 35 else "#333333")
+    ax.grid(False)
+    ax.tick_params(length=0)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.xaxis.tick_top()
+    ax.set_title(title, pad=30)
+    fig.tight_layout()
+    fig.savefig(filename)
+
+
+def bubble_grid(long, title, filename, group_col="career_stage3", order=STAGES,
+                colors=STAGE_COLORS, top=5):
+    pct, sizes, codes = get_pct(long, group_col=group_col, order=order, top=top)
+    fig, ax = plt.subplots(figsize=(5.0, 0.6 * top + 1.6))
+    for j, (grp, color) in enumerate(zip(order, colors)):
+        for i, code in enumerate(codes):
+            v = pct.loc[grp, code]
+            yi = len(codes) - 1 - i
+            ax.scatter(j, yi, s=v * 22 + 8, color=color, alpha=0.9,
+                       edgecolor="white", linewidth=1)
+            ax.text(j, yi - 0.38, f"{v:.0f}%", ha="center", va="top",
+                    fontsize=7, color="#555555")
+    ax.set_xticks(range(len(order)), [f"{g}\n(n={sizes[g]})" for g in order])
+    ax.set_yticks(range(len(codes)), codes[::-1])
+    ax.set_xlim(-0.6, len(order) - 0.4)
+    ax.set_ylim(-0.9, len(codes) - 0.4)
+    ax.grid(False)
+    ax.tick_params(length=0)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.xaxis.tick_top()
+    ax.set_title(title, pad=32)
+    fig.tight_layout()
+    fig.savefig(filename)
+
+
+def likert_by_group(title, filename, group_col="career_stage3", order=STAGES):
+    fig, axes = plt.subplots(len(order), 1, figsize=(6.5, 1.35 * len(order) + 0.9), sharex=True)
+    item_order = Data[options].apply(lambda s: (s >= 4).mean()).sort_values().index
+    for ax, grp in zip(axes, order):
+        sub = Data[Data[group_col] == grp]
+        pct = pd.DataFrame({c: sub[c].value_counts(normalize=True).reindex([1, 2, 3, 4, 5], fill_value=0) * 100
+                            for c in options}).T.loc[item_order]
+        y = np.arange(len(pct))
+        left = -(pct[1] + pct[2] + pct[3] / 2)
+        for r in [1, 2, 3, 4, 5]:
+            ax.barh(y, pct[r], left=left, color=LIKERT_COLORS[r], label=LIKERT_NAMES[r],
+                    edgecolor="white", height=0.7)
+            left = left + pct[r]
+        ax.axvline(0, color="#555555", linewidth=0.8)
+        ax.set_yticks(y, [labels[c] for c in pct.index], fontsize=8)
+        ax.set_title(f"{grp} (n={len(sub)})", fontsize=9, fontweight="bold")
+        ax.grid(False)
+    axes[-1].set_xlim(-80, 80)
+    axes[-1].set_xticks(range(-80, 81, 20), [f"{abs(t)}%" for t in range(-80, 81, 20)])
+    axes[-1].set_xlabel("Percentage of participants")
+    handles, labs = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labs, ncol=5, loc="lower center", bbox_to_anchor=(0.5, -0.01), fontsize=7)
+    fig.suptitle(title, x=0.02, ha="left", fontsize=11, fontweight="bold")
+    fig.tight_layout(rect=(0, 0.05, 1, 0.97))
+    fig.savefig(filename)
+
+
+# ===================== MEDIA TYPE COMPARISONS =====================
+MEDIA = ["Linear media", "Interactive (games)", "Music and other"]
+MEDIA_COLORS = ["#F4A6A6", "#E0607E", "#4A1E5C"]
+
+top_bottlenecks = long_bottleneck["code"].value_counts().head(4).index.tolist()
+top_concerns = long_concerns["code"].value_counts().head(4).index.tolist()
+
+# ---------- Figures ----------
+donuts_by_group("ai_use", AI_COLORS, "Would you use AI in your workflow?",
+                "figures/ai_use_by_media.pdf", group_col="media_group", order=MEDIA)
+heatmap_by_group(long_bottleneck, "Bottlenecks by media type",
+                 "figures/bottlenecks_by_media.pdf", group_col="media_group", order=MEDIA)
+bubble_grid(long_concerns, "Concerns about AI by media type",
+            "figures/concerns_by_media.pdf", group_col="media_group",
+            order=MEDIA, colors=MEDIA_COLORS)
+likert_by_group("Preferred AI tool types by media type",
+                "figures/likert_by_media.pdf", group_col="media_group", order=MEDIA)
+
+# ---------- Statistics ----------
+print("\n=== OPENNESS TO AI BY MEDIA TYPE ===")
+table = pd.crosstab(Data["media_group"], Data["ai_use"])
+chi2, p, dof, expected = chi2_contingency(table)
+v = np.sqrt(chi2 / (table.values.sum() * (min(table.shape) - 1)))
+print((pd.crosstab(Data["media_group"], Data["ai_use"], normalize="index") * 100).round(1))
+print(f"chi2({dof}) = {chi2:.2f}, p = {p:.3f}, V = {v:.2f}, min expected = {expected.min():.1f}")
+
+print("\n=== BOTTLENECKS BY MEDIA TYPE ===")
+print(compare_by_group(long_bottleneck, "media_group", top_bottlenecks))
+
+print("\n=== CONCERNS BY MEDIA TYPE ===")
+print(compare_by_group(long_concerns, "media_group", top_concerns))
+
+print("\n=== TOOL RATINGS BY MEDIA TYPE ===")
+rows = []
+for c in options:
+    groups = [g[c].values for _, g in Data.groupby("media_group")]
+    H, p_kw = kruskal(*groups)
+    eps2 = (H - len(groups) + 1) / (len(Data) - len(groups))
+    rows.append({"tool": labels[c], "H": round(H, 2), "p": p_kw, "epsilon2": round(eps2, 3)})
+res_media = pd.DataFrame(rows)
+res_media["p_holm"] = holm(res_media["p"])
+print(res_media.round(3))
+print(Data.groupby("media_group")[options].median())
